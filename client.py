@@ -1,5 +1,4 @@
 import io
-import os
 import queue
 import socket
 import struct
@@ -46,11 +45,14 @@ def update_image(video_label: tk.Label):
     :param video_label: Видеофрейм.
     :return:
     """
-    video_frame = video_stream_q.get()
+    try:
+        video_frame = video_stream_q.get()
 
-    a = Image.fromarray(video_frame)
-    b = ImageTk.PhotoImage(image=a)
-    video_label.configure(image=b)
+        a = Image.fromarray(video_frame)
+        b = ImageTk.PhotoImage(image=a)
+        video_label.configure(image=b)
+    except queue.Empty:
+        pass
 
     root.update()
     root.after(0, func=lambda: update_image(video_label))
@@ -87,6 +89,7 @@ def video_loop():
 
         image_stream = io.BytesIO()
         image_stream.write(connection.read(img_len))
+        image_stream.seek(0)
 
         data = np.fromstring(image_stream.getvalue(), dtype=np.uint8)
         image = cv2.imdecode(data, 1)
