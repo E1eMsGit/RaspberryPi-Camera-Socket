@@ -2,7 +2,6 @@ import io
 import queue
 import socket
 import struct
-import sys
 import threading
 import tkinter as tk
 from tkinter import messagebox
@@ -29,11 +28,16 @@ def init_ui():
 
     video_frame = tk.Frame(root, bg=bg_color, bd=1, relief="raised", width=740,
                            height=596)
-    video_label = tk.Label(video_frame, bd=2, relief="groove", height=576,
-                           width=720)
+    control_frame = tk.Frame(root, bg=bg_color, bd=1, relief="raised",
+                             width=740, height=50)
 
-    video_frame.pack(padx=10, pady=10)
-    video_frame.pack_propagate(0)
+    video_label = tk.Label(video_frame, bd=2, relief="groove", height=576,
+                           width=720, font=("Source Code Pro", 16, "bold"))
+
+    for frame in [video_frame, control_frame]:
+        frame.pack(padx=10, pady=10)
+        frame.pack_propagate(0)
+
     video_label.pack(padx=10, pady=10)
 
     update_image(video_label)
@@ -45,41 +49,32 @@ def update_image(video_label: tk.Label):
     :param video_label: Видеофрейм.
     :return:
     """
-    try:
-        video_frame = video_stream_q.get()
+    global status_index
+    connection_status = {0: "Attempting to connect to the server...",
+                         1: "Connection complete",
+                         2: "Server is not running. Connection fail"}
 
-        a = Image.fromarray(video_frame)
-        b = ImageTk.PhotoImage(image=a)
-        video_label.configure(image=b)
-    except queue.Empty:
-        pass
+    if not connection_status_q.empty():
+        status_index = connection_status_q.get()
+        video_label.configure(text=connection_status.get(status_index))
+        connection_status_q.task_done()
+    else:
+        if status_index == 0 or status_index == 2:
+            video_label.configure(text=connection_status.get(status_index))
+        elif status_index == 1:
+            video_frame = video_stream_q.get()
+            a = Image.fromarray(video_frame)
+            b = ImageTk.PhotoImage(image=a)
+            video_label.configure(image=b)
+            video_stream_q.task_done()
 
     root.update()
     root.after(0, func=lambda: update_image(video_label))
 
 
-def close_connection():
-    """
-    Уничтожает процессы.
-    Уничтожает пользовательский интерфейс.
-    Закрывает соединение.
-    :return:
-    """
-    global stop_thread
-    result = messagebox.askquestion(app_name, "Close the connection?",
-                                    icon='question')
-
-    if result == 'yes':
-        stop_thread = True
-        video_stream_p.join()
-        root.destroy()
-        client_socket.close()
-    else:
-        pass
-
-
 def video_loop():
     global stop_thread
+    global connection
 
     while stop_thread is False:
         img_len = struct.unpack("<L", connection.read(
@@ -98,22 +93,59 @@ def video_loop():
         video_stream_q.put(rgba_image)
 
 
-if __name__ == "__main__":
-    stop_thread = False
-    video_stream_q = queue.Queue()
-    video_stream_p = threading.Thread(target=video_loop)
+def open_connection():
+    """
+    Устанавливает соединение с сервером.
+    :return:
+    """
+    global connection
 
     try:
-        print("Attempting to connect to the server...")
         client_socket.connect((server_ip, server_port))
-        print("Connection complete")
+        connection_status = 1
+        connection = client_socket.makefile("rb")
+        video_stream_t.start()
     except socket.timeout:
-        print("Server is not running. Connection fail")
-        sys.exit()
+        connection_status = 2
+    finally:
+        connection_status_q.put(connection_status)
 
-    connection = client_socket.makefile("rb")
 
-    video_stream_p.start()
+def close_connection():
+    """
+    Уничтожает процессы.
+    Уничтожает пользовательский интерфейс.
+    Закрывает соединение.
+    :return:
+    """
+    global stop_thread
+    result = messagebox.askquestion(app_name, "Are you sure you want to exit?",
+                                    icon='question')
+
+    if result == 'yes':
+        if connection_t.is_alive():
+            connection_t.join()
+        if video_stream_t.is_alive():
+            stop_thread = True
+            video_stream_t.join()
+        root.destroy()
+        client_socket.close()
+    else:
+        pass
+
+
+if __name__ == "__main__":
+    connection = None
+    status_index = 0
+    stop_thread = False
+
+    video_stream_q = queue.Queue()
+    connection_status_q = queue.Queue()
+
+    video_stream_t = threading.Thread(target=video_loop)
+    connection_t = threading.Thread(target=open_connection)
+
+    connection_t.start()
 
     root = tk.Tk()
     init_ui()
