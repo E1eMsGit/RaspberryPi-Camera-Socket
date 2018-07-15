@@ -1,9 +1,16 @@
+# -*- coding: utf-8 -*-
+"""
+====================================================================
+Application for receiving video stream data from RaspberryPi camera.
+====================================================================
+"""
 import datetime
 import io
 import os
 import queue
 import socket
 import struct
+import sys
 import threading
 import tkinter as tk
 from tkinter import messagebox
@@ -13,28 +20,40 @@ import numpy as np
 from PIL import Image, ImageTk
 
 
-class VideoStream(object):
+class VideoStreamClient(object):
+    """
+    Socket client class for display RaspberryPi camera video stream data taken
+    from the server on RaspberryPi.
+    """
 
     def __init__(self, master):
         self.master = master
+        self.camera_data = None
+        self.status_index = 0
+        self.font = ("Source Code Pro", 16, "bold")
+        self.bg = "#FFFFFF"
+
+        if getattr(sys, "frozen", False):
+            self.bundle_dir = os.path.dirname(sys.executable)
+        else:
+            self.bundle_dir = os.path.dirname(os.path.abspath(__file__))
 
         self.master.title(app_name)
         self.master.resizable(width=False, height=False)
         self.master.configure(bg='#B0BEC5')
         self.master.protocol("WM_DELETE_WINDOW", lambda: self.close_event())
 
-        self.video_frame = tk.Frame(root, bg="#FFFFFF", bd=1, relief="raised",
+        self.video_frame = tk.Frame(root, bg=self.bg, bd=1, relief="raised",
                                     width=740, height=596)
-        self.control_frame = tk.Frame(root, bg="#FFFFFF", bd=1, relief="raised",
+        self.control_frame = tk.Frame(root, bg=self.bg, bd=1, relief="raised",
                                       width=740, height=50)
 
         self.video_label = tk.Label(self.video_frame, bd=2, relief="groove",
-                                    height=576, width=720,
-                                    font=("Source Code Pro", 16, "bold"))
+                                    width=720, height=576, font=self.font)
         self.snapshot_button = tk.Button(self.control_frame,
-                                         command=self.take_snapshot,
-                                         font=("Source Code Pro", 16, "bold"),
-                                         text="Snapshot", height=50, width=150)
+                                         command=self.make_snapshot,
+                                         font=self.font, text="Snapshot",
+                                         height=50, width=150)
 
         for frame in [self.video_frame, self.control_frame]:
             frame.pack(padx=10, pady=10)
@@ -45,64 +64,68 @@ class VideoStream(object):
 
         self.update_image()
 
-    def take_snapshot(self):
-        global queue_data
+    def make_snapshot(self):
+        """
+        Create catalog for snapshots if its not exists,
+        get date and time, make and save snapshot in Snapshots catalog.
+        :return:
+        """
+        if not os.path.exists("Snapshots"):
+            os.mkdir(os.path.join(self.bundle_dir, "Snapshots"))
 
         ts = datetime.datetime.now()
         filename = "{}.jpg".format(ts.strftime("%Y-%m-%d_%H-%M-%S"))
-        path = os.path.sep.join(("photo", filename))
+        path = os.path.sep.join(("Snapshots", filename))
 
-        cv2.imwrite(path, cv2.cvtColor(queue_data, cv2.COLOR_BGR2RGB))
+        cv2.imwrite(path, cv2.cvtColor(self.camera_data, cv2.COLOR_BGR2RGB))
 
     def update_image(self):
         """
-        Обновление изображения видеофрейма.
+        Update image in self.video_label.
         :return:
         """
-        global status_index
-        global queue_data
         connection_status = {0: "Attempting to connect to the server...",
                              1: "Connection complete",
                              2: "Server is not running. Connection fail"}
 
         if not connection_status_q.empty():
-            status_index = connection_status_q.get()
-            self.video_label.configure(text=connection_status.get(status_index))
+            self.status_index = connection_status_q.get()
+            self.video_label.configure(
+                text=connection_status.get(self.status_index))
             connection_status_q.task_done()
         else:
-            if status_index in [0, 2]:
+            if self.status_index in [0, 2]:
                 self.video_label.configure(
-                    text=connection_status.get(status_index))
-            elif status_index == 1:
-                queue_data = video_stream_q.get()
+                    text=connection_status.get(self.status_index))
+            elif self.status_index == 1:
+                self.camera_data = video_image_q.get()
+                video_image_q.task_done()
 
-                a = Image.fromarray(queue_data)
+                a = Image.fromarray(self.camera_data)
                 b = ImageTk.PhotoImage(image=a)
                 self.video_label.configure(image=b)
-                video_stream_q.task_done()
 
         root.update()
         root.after(0, func=lambda: self.update_image())
 
     def close_event(self):
         """
-        Уничтожает процессы.
-        Уничтожает пользовательский интерфейс.
-        Закрывает соединение.
+        Destroys the processes.
+        Destroys the user interface.
+        Closes the connection.
         :return:
         """
-        global stop_thread
         result = messagebox.askquestion(app_name,
                                         "Are you sure you want to exit?",
                                         icon='question')
 
         if result == 'yes':
-            if connection_t.is_alive():
-                connection_t.join()
-            if video_stream_t.is_alive():
-                stop_thread = True
-                video_stream_t.join()
-            root.destroy()
+            if open_connection_t.is_alive():
+                open_connection_t.join()
+            if get_video_stream_t.is_alive():
+                stop_video_stream_q.put(True)
+                get_video_stream_t.join()
+            self.master.destroy()
             client_socket.close()
         else:
             pass
@@ -110,63 +133,77 @@ class VideoStream(object):
 
 def open_connection():
     """
-    Устанавливает соединение с сервером.
+    Function for open_connection_t thread.
+    Establishes a connection to the server.
     :return:
     """
-    global connection
+    client_socket.settimeout(5)
 
     try:
         client_socket.connect((server_ip, server_port))
         connection_status = 1
         connection = client_socket.makefile("rb")
-        video_stream_t.start()
+        connection_q.put(connection)
+        get_video_stream_t.start()
     except socket.timeout:
         connection_status = 2
     finally:
         connection_status_q.put(connection_status)
 
 
-def get_stream_loop():
-    global stop_thread
-    global connection
+def get_video_image_loop():
+    """
+    Function for get_video_stream_t thread.
+    Get data from connection makefile, convert bgr to rgb image, put data to
+    video_image_q.
+    :return:
+    """
+    stop_video_stream = False
 
-    while stop_thread is False:
-        img_len = struct.unpack("<L", connection.read(
-            struct.calcsize("<L")))[0]
-        if not img_len:
-            break
+    if not connection_q.empty():
+        connection = connection_q.get()
+        connection_q.task_done()
 
-        image_stream = io.BytesIO()
-        image_stream.write(connection.read(img_len))
-        image_stream.seek(0)
+        while stop_video_stream is False:
+            img_len = struct.unpack("<L", connection.read(
+                struct.calcsize("<L")))[0]
+            if not img_len:
+                break
 
-        data = np.fromstring(image_stream.getvalue(), dtype=np.uint8)
-        image = cv2.imdecode(data, 1)
-        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            image_stream = io.BytesIO()
+            image_stream.write(connection.read(img_len))
+            image_stream.seek(0)
 
-        video_stream_q.put(rgb_image)
+            data = np.fromstring(image_stream.getvalue(), dtype=np.uint8)
+            bgr_video_image = cv2.imdecode(data, 1)
+            rgb_video_image = cv2.cvtColor(bgr_video_image, cv2.COLOR_BGR2RGB)
+
+            video_image_q.put(rgb_video_image)
+
+            if not stop_video_stream_q.empty():
+                stop_video_stream = stop_video_stream_q.get()
+                stop_video_stream_q.task_done()
 
 
 if __name__ == "__main__":
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client_socket.settimeout(5)
-
     server_ip = "192.168.1.4"
     server_port = 9090
     app_name = "RaspberryPi Video Streaming"
 
-    connection = None
-    status_index = 0
-    stop_thread = False
-    queue_data = None
-
-    connection_t = threading.Thread(target=open_connection)
+    # Queue for client_socket makefile.
+    connection_q = queue.Queue()
+    # Queue for connection status.
     connection_status_q = queue.Queue()
-    video_stream_t = threading.Thread(target=get_stream_loop)
-    video_stream_q = queue.Queue()
+    # Queue for camera data from connection makefile after convert to rgb.
+    video_image_q = queue.Queue()
+    # Queue for flag to stop video_stream_t thread.
+    stop_video_stream_q = queue.Queue()
 
-    connection_t.start()
+    open_connection_t = threading.Thread(target=open_connection)
+    get_video_stream_t = threading.Thread(target=get_video_image_loop)
 
     root = tk.Tk()
-    app = VideoStream(root)
+    app = VideoStreamClient(root)
+    open_connection_t.start()
     root.mainloop()
