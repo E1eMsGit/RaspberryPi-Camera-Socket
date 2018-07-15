@@ -43,10 +43,10 @@ class VideoStreamClient(object):
         self.master.configure(bg='#B0BEC5')
         self.master.protocol("WM_DELETE_WINDOW", lambda: self.close_event())
 
-        self.video_frame = tk.Frame(root, bg=self.bg, bd=1, relief="raised",
-                                    width=740, height=596)
-        self.control_frame = tk.Frame(root, bg=self.bg, bd=1, relief="raised",
-                                      width=740, height=50)
+        self.video_frame = tk.Frame(self.master, bg=self.bg, bd=1,
+                                    relief="raised", width=740, height=596)
+        self.control_frame = tk.Frame(self.master, bg=self.bg, bd=1,
+                                      relief="raised", width=740, height=50)
 
         self.video_label = tk.Label(self.video_frame, bd=2, relief="groove",
                                     width=720, height=576, font=self.font)
@@ -105,8 +105,8 @@ class VideoStreamClient(object):
                 b = ImageTk.PhotoImage(image=a)
                 self.video_label.configure(image=b)
 
-        root.update()
-        root.after(0, func=lambda: self.update_image())
+        self.master.update()
+        self.master.after(0, func=lambda: self.update_image())
 
     def close_event(self):
         """
