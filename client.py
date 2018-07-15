@@ -1,4 +1,6 @@
+import datetime
 import io
+import os
 import queue
 import socket
 import struct
@@ -23,16 +25,34 @@ class VideoStream(object):
 
         self.video_frame = tk.Frame(root, bg="#FFFFFF", bd=1, relief="raised",
                                     width=740, height=596)
+        self.control_frame = tk.Frame(root, bg="#FFFFFF", bd=1, relief="raised",
+                                      width=740, height=50)
 
         self.video_label = tk.Label(self.video_frame, bd=2, relief="groove",
                                     height=576, width=720,
                                     font=("Source Code Pro", 16, "bold"))
+        self.snapshot_button = tk.Button(self.control_frame,
+                                         command=self.take_snapshot,
+                                         font=("Source Code Pro", 16, "bold"),
+                                         text="Snapshot", height=50, width=150)
 
-        self.video_frame.pack(padx=10, pady=10)
-        self.video_frame.pack_propagate(0)
+        for frame in [self.video_frame, self.control_frame]:
+            frame.pack(padx=10, pady=10)
+            frame.pack_propagate(0)
+
         self.video_label.pack(padx=10, pady=10)
+        self.snapshot_button.pack(padx=5, pady=5)
 
         self.update_image()
+
+    def take_snapshot(self):
+        global queue_data
+
+        ts = datetime.datetime.now()
+        filename = "{}.jpg".format(ts.strftime("%Y-%m-%d_%H-%M-%S"))
+        path = os.path.sep.join(("photo", filename))
+
+        cv2.imwrite(path, cv2.cvtColor(queue_data, cv2.COLOR_BGR2RGB))
 
     def update_image(self):
         """
