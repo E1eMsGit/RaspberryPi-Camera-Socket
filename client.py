@@ -11,8 +11,8 @@ import queue
 import socket
 import struct
 import sys
-import threading
 import tkinter as tk
+from threading import Thread
 from tkinter import messagebox
 
 import cv2 as cv
@@ -67,8 +67,8 @@ class VideoStreamClient(object):
                                   width=720, height=576, font=self.font)
 
         self.record_btn = tk.Button(self.control_frame,
-                                    command=self.start_stop_record,
-                                    font=self.font, text="Start record",
+                                    command=self.start_stop_recording,
+                                    font=self.font, text="Start recording",
                                     height=50, width=27)
         self.snapshot_btn = tk.Button(self.control_frame, font=self.font,
                                       command=self.make_snapshot,
@@ -99,7 +99,7 @@ class VideoStreamClient(object):
 
         cv.imwrite(path, cv.cvtColor(self.camera_data, cv.COLOR_BGR2RGB))
 
-    def start_stop_record(self):
+    def start_stop_recording(self):
         """
         Create catalog for video files if its not exists,
         start write video stream thread if self.write_video_stream_flag is True.
@@ -109,19 +109,19 @@ class VideoStreamClient(object):
             os.mkdir(os.path.join(self.bundle_dir, "Video"))
 
         if self.create_new_thread is True:
-            self.record_btn.configure(text="Stop record")
-            thread = threading.Thread(target=self.record)
+            self.record_btn.configure(text="Stop recording")
+            thread = Thread(target=self.recording)
             self.write_file_threads.append(thread)
             self.write_file_threads[-1].start()
         else:
-            self.record_btn.configure(text="Start record")
+            self.record_btn.configure(text="Start recording")
             self.file_writing_status_q.put(False)
             self.write_file_threads[-1].join()
 
         self.start_write_video_file = not self.start_write_video_file
         self.create_new_thread = not self.create_new_thread
 
-    def record(self):
+    def recording(self):
         """
         Function for write video stream in file thread.
         Get date and time, write video file in Video catalog.
@@ -275,8 +275,8 @@ if __name__ == "__main__":
     # Queue for flag to stop video_stream_t thread.
     stop_video_stream_q = queue.Queue()
 
-    open_connection_t = threading.Thread(target=open_connection)
-    get_video_stream_t = threading.Thread(target=get_video_image_loop)
+    open_connection_t = Thread(target=open_connection)
+    get_video_stream_t = Thread(target=get_video_image_loop)
 
     root = tk.Tk()
     app = VideoStreamClient(root)
