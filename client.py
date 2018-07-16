@@ -15,7 +15,7 @@ import threading
 import tkinter as tk
 from tkinter import messagebox
 
-import cv2
+import cv2 as cv
 import numpy as np
 from PIL import Image, ImageTk
 
@@ -29,7 +29,21 @@ class VideoStreamClient(object):
     def __init__(self, master):
         self.master = master
         self.camera_data = None
-        self.status_index = 0
+        # Status index - 1 = Attempting to connect to the server...
+        self.status_index = 1
+
+        # Flag for start put image to self.video_image_q queue.
+        self.start_write_video_file = False
+        # Flag for create and start new thread for writing video file.
+        self.create_new_thread = True
+        # List of write video file threads.
+        self.write_file_threads = []
+
+        # Queue for status of write or stop writing video file.
+        self.file_writing_status_q = queue.Queue()
+        # Queue for video images for writing video file.
+        self.video_image_q = queue.Queue()
+
         self.font = ("Source Code Pro", 16, "bold")
         self.bg = "#FFFFFF"
 
@@ -45,24 +59,30 @@ class VideoStreamClient(object):
 
         self.video_frame = tk.Frame(self.master, bg=self.bg, bd=1,
                                     relief="raised", width=740, height=596)
+
         self.control_frame = tk.Frame(self.master, bg=self.bg, bd=1,
                                       relief="raised", width=740, height=50)
 
-        self.video_label = tk.Label(self.video_frame, bd=2, relief="groove",
-                                    width=720, height=576, font=self.font)
-        self.snapshot_button = tk.Button(self.control_frame,
-                                         command=self.make_snapshot,
-                                         font=self.font, text="Snapshot",
-                                         height=50, width=150)
+        self.video_lbl = tk.Label(self.video_frame, bd=2, relief="groove",
+                                  width=720, height=576, font=self.font)
+
+        self.record_btn = tk.Button(self.control_frame,
+                                    command=self.start_stop_record,
+                                    font=self.font, text="Start record",
+                                    height=50, width=27)
+        self.snapshot_btn = tk.Button(self.control_frame, font=self.font,
+                                      command=self.make_snapshot,
+                                      text="Snapshot", height=50)
 
         for frame in [self.video_frame, self.control_frame]:
             frame.pack(padx=10, pady=10)
             frame.pack_propagate(0)
 
-        self.video_label.pack(padx=10, pady=10)
-        self.snapshot_button.pack(padx=5, pady=5)
+        self.video_lbl.pack(padx=10, pady=10)
+        self.record_btn.pack(side='left', padx=5, pady=5)
+        self.snapshot_btn.pack(fill='x', padx=5, pady=5)
 
-        self.update_image()
+        self.checking_connection_status()
 
     def make_snapshot(self):
         """
@@ -77,42 +97,96 @@ class VideoStreamClient(object):
         filename = "{}.jpg".format(ts.strftime("%Y-%m-%d_%H-%M-%S"))
         path = os.path.sep.join(("Snapshots", filename))
 
-        cv2.imwrite(path, cv2.cvtColor(self.camera_data, cv2.COLOR_BGR2RGB))
+        cv.imwrite(path, cv.cvtColor(self.camera_data, cv.COLOR_BGR2RGB))
 
-    def update_image(self):
+    def start_stop_record(self):
         """
-        Update image in self.video_label.
+        Create catalog for video files if its not exists,
+        start write video stream thread if self.write_video_stream_flag is True.
         :return:
         """
-        connection_status = {0: "Attempting to connect to the server...",
-                             1: "Connection complete",
+        if not os.path.exists("Video"):
+            os.mkdir(os.path.join(self.bundle_dir, "Video"))
+
+        if self.create_new_thread is True:
+            self.record_btn.configure(text="Stop record")
+            thread = threading.Thread(target=self.record)
+            self.write_file_threads.append(thread)
+            self.write_file_threads[-1].start()
+        else:
+            self.record_btn.configure(text="Start record")
+            self.file_writing_status_q.put(False)
+            self.write_file_threads[-1].join()
+
+        self.start_write_video_file = not self.start_write_video_file
+        self.create_new_thread = not self.create_new_thread
+
+    def record(self):
+        """
+        Function for write video stream in file thread.
+        Get date and time, write video file in Video catalog.
+        :return:
+        """
+        write_status = True
+        ts = datetime.datetime.now()
+        filename = "{}.avi".format(ts.strftime("%Y-%m-%d_%H-%M-%S"))
+        path = os.path.sep.join(("Video", filename))
+
+        fps = 25.0
+        resolution = (720, 576)
+        four_cc = cv.VideoWriter_fourcc(*'MJPG')
+        video = cv.VideoWriter(path, four_cc, fps, resolution)
+
+        while write_status is True:
+            if not self.video_image_q.empty():
+                video_image = self.video_image_q.get()
+                self.video_image_q.task_done()
+                video.write(cv.cvtColor(video_image, cv.COLOR_BGR2RGB))
+            if not self.file_writing_status_q.empty():
+                write_status = self.file_writing_status_q.get()
+                self.file_writing_status_q.task_done()
+
+    def checking_connection_status(self):
+        """
+        Check socket connection status.
+        :return:
+        """
+        connection_status = {0: "Connection complete",
+                             1: "Attempting to connect to the server...",
                              2: "Server is not running. Connection fail"}
 
         if not connection_status_q.empty():
             self.status_index = connection_status_q.get()
-            self.video_label.configure(
-                text=connection_status.get(self.status_index))
             connection_status_q.task_done()
         else:
-            if self.status_index in [0, 2]:
-                self.video_label.configure(
+            if self.status_index in [1, 2]:
+                self.video_lbl.configure(
                     text=connection_status.get(self.status_index))
-            elif self.status_index == 1:
+                self.record_btn.configure(state="disabled")
+                self.snapshot_btn.configure(state="disabled")
+            elif self.status_index == 0:
+                self.record_btn.configure(state="normal")
+                self.snapshot_btn.configure(state="normal")
+
                 self.camera_data = video_image_q.get()
                 video_image_q.task_done()
 
+                if self.start_write_video_file is True:
+                    self.video_image_q.put(self.camera_data)
+
+                # Update image in self.video_label.
                 a = Image.fromarray(self.camera_data)
                 b = ImageTk.PhotoImage(image=a)
-                self.video_label.configure(image=b)
+                self.video_lbl.configure(image=b)
 
         self.master.update()
-        self.master.after(0, func=lambda: self.update_image())
+        self.master.after(0, func=lambda: self.checking_connection_status())
 
     def close_event(self):
         """
         Destroys the processes.
-        Destroys the user interface.
-        Closes the connection.
+        Destroys the user interface.
+        Closes the connection.
         :return:
         """
         result = messagebox.askquestion(app_name,
@@ -141,7 +215,7 @@ def open_connection():
 
     try:
         client_socket.connect((server_ip, server_port))
-        connection_status = 1
+        connection_status = 0
         connection = client_socket.makefile("rb")
         connection_q.put(connection)
         get_video_stream_t.start()
@@ -158,6 +232,7 @@ def get_video_image_loop():
     video_image_q.
     :return:
     """
+    # Flag for stop receiving video stream.
     stop_video_stream = False
 
     if not connection_q.empty():
@@ -175,8 +250,8 @@ def get_video_image_loop():
             image_stream.seek(0)
 
             data = np.fromstring(image_stream.getvalue(), dtype=np.uint8)
-            bgr_video_image = cv2.imdecode(data, 1)
-            rgb_video_image = cv2.cvtColor(bgr_video_image, cv2.COLOR_BGR2RGB)
+            bgr_video_image = cv.imdecode(data, 1)
+            rgb_video_image = cv.cvtColor(bgr_video_image, cv.COLOR_BGR2RGB)
 
             video_image_q.put(rgb_video_image)
 
