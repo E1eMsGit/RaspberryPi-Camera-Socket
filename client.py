@@ -92,7 +92,8 @@ class VideoStreamClient(object):
     def start_stop_recording(self):
         """
         Create catalog for video files if its not exists,
-        start write video stream thread if self.write_video_stream_flag is True.
+        Send start / stop writing flag and opencv settings for video file
+        to get_video_image_loop thread.
         :return:
         """
         if not os.path.exists("Video"):
@@ -199,6 +200,7 @@ def get_video_image_loop():
     Function for get_video_stream_t thread.
     Get data from connection makefile, convert bgr to rgb image, put data to
     video_image_q.
+    If start_writing flag is True - write video stream to file.
     :return:
     """
     # Flag for stop receiving video stream.
