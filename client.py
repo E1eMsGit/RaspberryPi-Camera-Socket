@@ -7,11 +7,11 @@ Application for receiving video stream data from RaspberryPi camera.
 import datetime
 import io
 import os
-import queue
 import socket
 import struct
 import sys
 import tkinter as tk
+from queue import Queue
 from threading import Thread
 from tkinter import messagebox
 
@@ -31,18 +31,8 @@ class VideoStreamClient(object):
         self.camera_data = None
         # Status index - 1 = Attempting to connect to the server...
         self.status_index = 1
-
-        # Flag for start put image to self.video_image_q queue.
-        self.start_write_video_file = False
-        # Flag for create and start new thread for writing video file.
-        self.create_new_thread = True
-        # List of write video file threads.
-        self.write_file_threads = []
-
-        # Queue for status of write or stop writing video file.
-        self.file_writing_status_q = queue.Queue()
-        # Queue for video images for writing video file.
-        self.video_image_q = queue.Queue()
+        # Flag for start writing video file and change text on record_btn.
+        self.start_writing = True
 
         self.font = ("Source Code Pro", 16, "bold")
         self.bg = "#FFFFFF"
@@ -108,43 +98,24 @@ class VideoStreamClient(object):
         if not os.path.exists("Video"):
             os.mkdir(os.path.join(self.bundle_dir, "Video"))
 
-        if self.create_new_thread is True:
+        if self.start_writing is True:
             self.record_btn.configure(text="Stop recording")
-            thread = Thread(target=self.recording)
-            self.write_file_threads.append(thread)
-            self.write_file_threads[-1].start()
+            ts = datetime.datetime.now()
+            filename = "{}.avi".format(ts.strftime("%Y-%m-%d_%H-%M-%S"))
+            path = os.path.sep.join(("Video", filename))
+
+            fps = 25.0
+            resolution = (720, 576)
+            four_cc = cv.VideoWriter_fourcc(*'MJPG')
+            video = cv.VideoWriter(path, four_cc, fps, resolution)
+            video_file_settings_q.put(video)
+            start_writing_q.put(True)
+
         else:
             self.record_btn.configure(text="Start recording")
-            self.file_writing_status_q.put(False)
-            self.write_file_threads[-1].join()
+            start_writing_q.put(False)
 
-        self.start_write_video_file = not self.start_write_video_file
-        self.create_new_thread = not self.create_new_thread
-
-    def recording(self):
-        """
-        Function for write video stream in file thread.
-        Get date and time, write video file in Video catalog.
-        :return:
-        """
-        write_status = True
-        ts = datetime.datetime.now()
-        filename = "{}.avi".format(ts.strftime("%Y-%m-%d_%H-%M-%S"))
-        path = os.path.sep.join(("Video", filename))
-
-        fps = 25.0
-        resolution = (720, 576)
-        four_cc = cv.VideoWriter_fourcc(*'MJPG')
-        video = cv.VideoWriter(path, four_cc, fps, resolution)
-
-        while write_status is True:
-            if not self.video_image_q.empty():
-                video_image = self.video_image_q.get()
-                self.video_image_q.task_done()
-                video.write(cv.cvtColor(video_image, cv.COLOR_BGR2RGB))
-            if not self.file_writing_status_q.empty():
-                write_status = self.file_writing_status_q.get()
-                self.file_writing_status_q.task_done()
+        self.start_writing = not self.start_writing
 
     def checking_connection_status(self):
         """
@@ -170,9 +141,6 @@ class VideoStreamClient(object):
 
                 self.camera_data = video_image_q.get()
                 video_image_q.task_done()
-
-                if self.start_write_video_file is True:
-                    self.video_image_q.put(self.camera_data)
 
                 # Update image in self.video_label.
                 a = Image.fromarray(self.camera_data)
@@ -212,6 +180,7 @@ def open_connection():
     :return:
     """
     client_socket.settimeout(5)
+    connection_status = None
 
     try:
         client_socket.connect((server_ip, server_port))
@@ -234,6 +203,10 @@ def get_video_image_loop():
     """
     # Flag for stop receiving video stream.
     stop_video_stream = False
+    # Flag for start video stream to file.
+    start_writing = False
+    # Video file opencv settings.
+    video_file = None
 
     if not connection_q.empty():
         connection = connection_q.get()
@@ -255,6 +228,25 @@ def get_video_image_loop():
 
             video_image_q.put(rgb_video_image)
 
+            # Check start writing queue.
+            if not start_writing_q.empty():
+                start_writing = start_writing_q.get()
+                start_writing_q.task_done()
+
+            # Check video file opencv settings queue.
+            if not video_file_settings_q.empty():
+                video_file = video_file_settings_q.get()
+                video_file_settings_q.task_done()
+
+            # Write video stream to file.
+            if start_writing is True:
+                video_file.write(cv.cvtColor(rgb_video_image, cv.COLOR_BGR2RGB))
+            else:
+                if video_file is not None:
+                    video_file.release()
+                    video_file = None
+
+            # Check stop video stream queue for exit loop.
             if not stop_video_stream_q.empty():
                 stop_video_stream = stop_video_stream_q.get()
                 stop_video_stream_q.task_done()
@@ -267,13 +259,17 @@ if __name__ == "__main__":
     app_name = "RaspberryPi Video Streaming"
 
     # Queue for client_socket makefile.
-    connection_q = queue.Queue()
+    connection_q = Queue()
     # Queue for connection status.
-    connection_status_q = queue.Queue()
+    connection_status_q = Queue()
     # Queue for camera data from connection makefile after convert to rgb.
-    video_image_q = queue.Queue()
+    video_image_q = Queue()
     # Queue for flag to stop video_stream_t thread.
-    stop_video_stream_q = queue.Queue()
+    stop_video_stream_q = Queue()
+    # Queue for flag to start writing video file.
+    start_writing_q = Queue()
+    # Queue for opencv settings for video file.
+    video_file_settings_q = Queue()
 
     open_connection_t = Thread(target=open_connection)
     get_video_stream_t = Thread(target=get_video_image_loop)
